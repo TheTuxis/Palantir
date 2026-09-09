@@ -1,0 +1,6 @@
+import { invoke } from "@tauri-apps/api/core";
+import "./sessions.css";
+type Session={id:string;ticketTitle:string;agent:string;status:string;startedAt:string;finishedAt?:string;summary?:string};
+const open=async()=>{let panel=document.querySelector<HTMLElement>(".sessions-panel");if(!panel){panel=document.createElement("aside");panel.className="sessions-panel";document.body.append(panel)}panel.innerHTML="<button class='close-sessions'>×</button><p>SESSION ARCHIVE</p><h2>Sesiones</h2><div class='session-list'>Cargando…</div>";panel.querySelector(".close-sessions")?.addEventListener("click",()=>panel?.remove());try{const sessions=await invoke<Session[]>("list_sessions");const list=panel.querySelector(".session-list")!;list.innerHTML=sessions.length?sessions.map(s=>`<article><small>${s.status} · ${s.agent}</small><h3>${s.ticketTitle}</h3><time>${new Date(s.startedAt).toLocaleString()}</time><pre>${s.summary??"Sin salida todavía"}</pre></article>`).join(""):"No hay sesiones registradas."}catch(error){panel.querySelector(".session-list")!.textContent=String(error)}};
+const bind = () => document.querySelector<HTMLButtonElement>(".rail button:nth-of-type(2)")?.addEventListener("click", () => void open());
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", bind); else bind();

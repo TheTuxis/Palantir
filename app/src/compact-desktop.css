@@ -1,0 +1,107 @@
+/* Dense, quiet desktop workspace: the board stays primary and the canvas recedes. */
+:root{
+  color-scheme:dark;
+  background:#101113;
+  color:#eceeeb;
+}
+
+/* The window is capped at exactly the viewport height and never scrolls as a
+   whole: the title bar and status bar stay put, and only the active
+   section's content (e.g. a kanban column's card list) scrolls internally. */
+html,body,#root{height:100%}
+body{overflow:hidden}
+.shell{
+  height:100vh;
+  overflow:hidden;
+  flex-direction:column;
+  background:
+    radial-gradient(900px 520px at 85% -18%,#24312b45 0%,transparent 66%),
+    radial-gradient(700px 460px at 38% 112%,#20263b35 0%,transparent 68%),
+    #101113;
+}
+
+/* Draggable title-bar strip for the macOS overlay window: a real, visible bar
+   (not just an invisible hit box) that also calls the Tauri drag API
+   directly on mousedown, so it doesn't depend on attribute-only detection.
+   The rail and workspace clear it with matching top padding below. */
+.window-drag-region{position:fixed;top:0;left:0;right:0;height:36px;z-index:50;background:#101113}
+.shell-body{display:flex;flex:1;min-height:0;overflow:hidden;padding:12px;padding-top:36px;gap:12px}
+.statusbar{flex:none;height:26px;display:flex;align-items:center;gap:14px;padding:0 14px;background:#101113;border-top:1px solid #212327;font-size:10.5px;color:#8a9088}
+.statusbar-item{white-space:nowrap}
+.statusbar-right{margin-left:auto}
+
+/* Activity-bar rail: an always-visible icon strip that widens in place when a
+   click opens it, the same mechanic VS Code uses for its own activity bar. */
+.rail{
+  width:56px;
+  padding:10px 6px;
+  gap:2px;
+  background:#17181aeb;
+  border:1px solid #2a2c30;
+  border-radius:14px;
+  box-shadow:0 14px 34px #0008;
+  overflow:hidden;
+  transition:width 160ms ease;
+}
+.rail.expanded{width:192px}
+.rail b{padding:6px 8px;margin-bottom:5px;font-size:14px;color:#d7dad6;white-space:nowrap}
+.rail .brand-mark{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:650;letter-spacing:-.2px;color:#e7ebe5}
+.brand-mark svg{width:19px;height:19px;flex:none;fill:none;stroke:#b7d1b0;stroke-width:1.35}.brand-mark circle{fill:#b7d1b0;stroke:none}
+.brand-mark span{display:none}.rail.expanded .brand-mark span{display:inline}
+.rail button{min-height:34px;padding:5px 8px 5px 6px;gap:9px;border-radius:6px;border-left:2px solid transparent;font-size:12px;justify-content:center;white-space:nowrap}
+.rail.expanded button{justify-content:flex-start}
+.nav-icon{width:17px;height:17px;flex:none;opacity:.75}
+.rail small{display:none;font-size:11px}.rail.expanded small{display:block}
+.rail button.active{background:#2b2e2f;color:#f4f5f1;border-left-color:#bdd7b5}.rail button.active .nav-icon{color:#bdd7b5;opacity:1}
+.settings-nav{margin-top:auto!important;margin-bottom:8px!important;padding-top:12px!important;border-top:1px solid #34383d!important;border-radius:0!important}.queue-label,.queue-blocked{margin-left:5px!important;background:#314637!important;color:#cfe6c7!important}.queue-blocked{background:#4a292e!important;color:#ffd0d0!important}.settings-modal{max-height:min(760px,90vh);overflow:auto}.settings-modal select[multiple]{min-height:96px}.settings-copy{margin:-2px 0 12px;font-size:11px;color:#9ba49c}.remote-notice{margin:4px 0 12px;padding:8px;border:1px solid #76683c;border-radius:6px;background:#342f1e;color:#e7d98e;font-size:11px}.remote-notice code{background:#2a2510;padding:1px 4px;border-radius:3px}.remote-test{display:flex;align-items:center;gap:10px;margin-top:12px}.remote-test span{font-size:11px;color:#a8c4a1}
+
+.workspace{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:20px 24px 22px;min-width:0;border-radius:14px;background:#15171a;box-shadow:0 14px 34px #0008}
+.workspace>header{flex:none;min-height:36px;margin-bottom:12px}
+.workspace h1{font-size:20px;letter-spacing:-.45px;line-height:1.1}
+.workspace header p,.review>p{font-size:10px;line-height:1.2;color:#858a87}
+.primary{min-height:32px;padding:6px 11px;border-radius:7px;font-size:12px}
+.notice{flex:none}
+.board,.sessions-view,.repo-catalog{flex:1;min-height:0}
+.sessions-view,.repo-catalog{overflow:auto}
+
+.board{gap:9px;align-items:stretch;overflow:hidden}
+.column{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:9px;background:#1b1d20b8;border-color:#2c2f33;border-radius:8px}
+.column h2{flex:none}
+.column-body{flex:1;min-height:0;overflow-y:auto}
+.column h2{height:24px;margin:0 0 7px;padding:0 2px;font-size:12px;letter-spacing:-.1px}
+.column h2 small{font-size:10px;color:#858b87}
+.card{margin:0 0 7px;padding:9px 10px;background:#222428;border-color:#303339;border-radius:7px}
+.card>div{font-size:10px;margin-bottom:5px}.card strong{font-size:10px;color:#b4c8ac}
+.card em{padding:2px 4px;font-size:9px}.card h3{margin:0 0 4px;font-size:12px;line-height:1.3}.card p{font-size:11px;line-height:1.35}
+.card footer{margin-top:8px;padding:4px 6px;border-radius:4px;font-size:9px;line-height:1.2;background:#2b2e32;color:#a9ada9}
+.card:hover,.selected{border-color:#606862;background:#26292d}
+
+.notice{margin:0 0 10px;padding:7px 9px;border-radius:6px;font-size:11px}
+.content-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:9px;align-content:start}.content-list>article{padding:13px;background:#1d1f22;border:1px solid #2e3136;border-radius:8px}.content-list small{font-size:10px;color:#a8c4a1}.content-list h2{margin:6px 0 3px;font-size:13px;font-weight:600}.content-list p,.content-list time{font-size:11px;color:#979d99}.content-list pre{max-height:180px;overflow:auto;margin-top:10px;padding:9px;background:#151618;border-radius:6px;color:#c9cdca;font-size:10px;white-space:pre-wrap}
+.modal-backdrop{background:#070809a8!important;backdrop-filter:blur(3px)}
+.review{width:min(760px,90vw);height:min(700px,86vh);padding:25px 28px!important;background:#1d1f22!important;border-color:#34373c!important;border-radius:10px!important;box-shadow:0 32px 100px #000c!important}
+.review:before{background:#050607b3!important}.review h2{font-size:23px!important;letter-spacing:-.45px}.review article{margin:17px 0!important;padding:14px!important}.review article h3,.execution-detail h3{margin:0 0 7px!important;font-size:12px!important}.review p{font-size:12px;line-height:1.5}.review dt,.review dd{padding:6px 0!important;font-size:11px}.review pre{max-height:175px;padding:10px!important;font-size:10px;line-height:1.45;background:#151618!important;border-radius:6px}
+.report-section{margin:7px 0;padding:8px 9px;background:#181a1d;border-left:2px solid #5d715c;border-radius:4px}.report-section h4{margin:0 0 3px;color:#c5d8bf;font-size:10px}.report-section p{margin:0;font-size:11px;white-space:pre-wrap}.ticket-actions{display:flex;flex-wrap:wrap;gap:5px;margin:12px 0 14px;padding:5px;background:#181a1d;border:1px solid #30333a;border-radius:7px}.ticket-actions button{min-height:28px;padding:5px 8px;border:0;border-radius:5px;background:transparent;color:#aeb4b0;font-size:11px;cursor:pointer}.ticket-actions button:hover{background:#2b2e32;color:#eef1ec}.ticket-actions button:last-child{color:#c7ddc0}
+.ticket-actions button.danger{color:#d9a5a5}.ticket-actions button.danger:hover{background:#3a2326;color:#ffd8d8}
+.action-error{margin:-5px 0 10px!important;padding:7px 9px;background:#3a2326;border:1px solid #74464b;border-radius:6px;color:#ffd8d8!important;font-size:11px!important}
+
+.ticket-modal{width:min(620px,92vw);padding:25px 28px;border-color:#3a3d41!important;border-radius:10px;box-shadow:0 30px 100px #000d}.ticket-modal h2{font-size:22px}.ticket-modal label{gap:5px;font-size:11px}.ticket-modal input,.ticket-modal textarea,.ticket-modal select{min-height:32px;padding:7px 9px;font-size:12px}.ticket-modal textarea{min-height:80px}.ticket-modal footer{margin-top:14px;padding-top:12px;font-size:10px}
+
+/* Action controls use one compact, tactile language across the workspace. */
+.workspace button:not(.card),.review button,.ticket-modal button{min-height:30px;padding:6px 10px;border:1px solid #3c4146;border-radius:6px;background:#25282c;color:#d8ddda;font-size:11px;font-weight:600;letter-spacing:.01em;cursor:pointer;transition:transform 120ms ease,background 120ms ease,border-color 120ms ease,color 120ms ease,box-shadow 120ms ease}
+.workspace button:not(.card):hover,.review button:hover,.ticket-modal button:hover{transform:translateY(-1px);background:#30343a;border-color:#656c69;color:#fff}
+.workspace button:not(.card):active,.review button:active,.ticket-modal button:active{transform:translateY(0);box-shadow:none}
+.workspace button:not(.card):focus-visible,.review button:focus-visible,.ticket-modal button:focus-visible{outline:2px solid #b9d8ae;outline-offset:2px}
+.primary,.workspace .primary,.review .primary,.ticket-modal .primary{border-color:#bdd7b5!important;background:linear-gradient(145deg,#d6ead0,#a9c69f)!important;color:#152019!important;box-shadow:inset 0 1px #f6fff1,0 5px 14px #07090866}
+.primary:hover,.workspace .primary:hover,.review .primary:hover,.ticket-modal .primary:hover{background:linear-gradient(145deg,#edf8e8,#b8d5ae)!important;border-color:#effbe9!important;color:#0b120c!important}
+.secondary,.workspace .secondary,.review .secondary{background:#202428!important;color:#cbd1cd!important;border-color:#495049!important}
+.secondary:hover,.workspace .secondary:hover,.review .secondary:hover{background:#2c3130!important;border-color:#7b857c!important}
+.workspace button.danger,.review button.danger{border-color:#74464b!important;background:#332125!important;color:#f1bdbd!important}.workspace button.danger:hover,.review button.danger:hover{background:#4a292e!important;border-color:#ad646a!important;color:#ffe0e0!important}
+.content-list article>button{margin-top:10px}.follow-up{display:grid;gap:8px;margin-top:14px;padding:12px;background:#181a1d;border:1px solid #30343a;border-radius:7px}.follow-up h3,.follow-up h4{margin:0}.follow-up button{justify-self:start}.ticket-actions .primary{margin-left:auto}.x,.ticket-modal .x{min-height:auto!important;padding:2px 6px!important;border-color:transparent!important;background:transparent!important;box-shadow:none!important;color:#aab1ad!important;font-size:20px!important}.x:hover,.ticket-modal .x:hover{color:#fff!important;background:#31353a!important}
+@media(prefers-reduced-motion:reduce){.workspace button:not(.card),.review button,.ticket-modal button,.rail{transition:none}}
+
+.sessions-panel{width:min(390px,90vw);padding:22px;background:#1d1f22;border-color:#34373c}.sessions-panel h2{font-size:21px}.session-list article{padding:11px}.session-list pre{font-size:10px}
+
+@media(max-width:900px){
+  .rail.expanded{width:164px}.workspace{padding:17px 13px}.column{min-width:220px}
+}

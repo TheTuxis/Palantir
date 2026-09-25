@@ -4,7 +4,7 @@
 //
 // This is an independent instance with its own SQLite database, ticket
 // board and execution queue (not a stateless worker) — run it on whichever
-// machine has your repositories and the `codex`/`claude` CLIs installed.
+// machine has your repositories and the `codex`/`claude`/`opencode` CLIs installed.
 //
 // Not yet ported from the desktop app: planning tickets/sub-kanban,
 // archiving, follow-up/resume, retry and stop. Those remain desktop-only
@@ -83,6 +83,7 @@ struct Session {
     summary: Option<String>,
     base_commit: Option<String>,
     changes_detected: Option<String>,
+    session_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -124,7 +125,7 @@ struct Preferences {
 fn default_preferences() -> Preferences {
     Preferences {
         max_concurrent_tasks: 1,
-        enabled_agents: vec!["codex".into(), "claude".into()],
+        enabled_agents: vec!["codex".into(), "claude".into(), "opencode".into()],
         allowed_models: vec![
             "gpt-5.6-sol".into(),
             "gpt-5.6-terra".into(),
@@ -132,6 +133,9 @@ fn default_preferences() -> Preferences {
             "claude-opus-5".into(),
             "claude-sonnet-5".into(),
             "claude-haiku-4-5-20251001".into(),
+            "openai/gpt-5.6-sol".into(),
+            "openai/gpt-5.6-terra".into(),
+            "openai/gpt-5.6-luna".into(),
         ],
         allowed_reasoning: vec![
             "low".into(),
@@ -215,10 +219,37 @@ impl AgentAdapter for ClaudeAdapter {
     }
 }
 
+struct OpenCodeAdapter;
+impl AgentAdapter for OpenCodeAdapter {
+    fn start(&self, ticket: &Ticket, prompt: &str) -> AgentInvocation {
+        AgentInvocation {
+            program: "opencode",
+            args: vec![
+                "run".into(),
+                "--model".into(),
+                ticket.model.clone(),
+                "--variant".into(),
+                ticket.reasoning.clone(),
+                "--auto".into(),
+                "--format".into(),
+                "json".into(),
+                prompt.into(),
+            ],
+        }
+    }
+    fn session_id_from_output(&self, output: &str) -> Option<String> {
+        output.lines().find_map(|line| {
+            let event: serde_json::Value = serde_json::from_str(line).ok()?;
+            event.get("sessionID")?.as_str().map(str::to_owned)
+        })
+    }
+}
+
 fn adapter_for(agent: &str) -> Result<Box<dyn AgentAdapter>, String> {
     match agent {
         "codex" => Ok(Box::new(CodexAdapter)),
         "claude" => Ok(Box::new(ClaudeAdapter)),
+        "opencode" => Ok(Box::new(OpenCodeAdapter)),
         _ => Err("Agente no compatible.".into()),
     }
 }
@@ -270,6 +301,13 @@ fn execution_summary(log: &str) -> String {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
+        // opencode: `{"type":"text","part":{"text":"..."}}`.
+        if event.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+            if let Some(text) = event.pointer("/part/text").and_then(serde_json::Value::as_str) {
+                summary = Some(text.to_owned());
+            }
+            continue;
+        }
         let Some(item) = event.get("item") else {
             continue;
         };
@@ -582,7 +620,7 @@ fn valid_ticket_input(title: &str, agent: &str, model: &str, reasoning: &str) ->
     if title.trim().is_empty() {
         return Err("Completá: título.".into());
     }
-    if !matches!(agent, "codex" | "claude") {
+    if !matches!(agent, "codex" | "claude" | "opencode") {
         return Err("Agente no compatible.".into());
     }
     if model.trim().is_empty() || reasoning.trim().is_empty() {
@@ -730,7 +768,7 @@ fn list_sessions(state: &Arc<AppState>) -> HandlerResult {
     let db = state.db.lock().map_err(|_| (500, "Base de datos no disponible".into()))?;
     let mut statement = db
         .prepare(
-            "SELECT e.id,e.ticket_id,t.title,t.agent,e.status,e.started_at,e.finished_at,e.summary,e.base_commit,e.changes_detected \
+            "SELECT e.id,e.ticket_id,t.title,t.agent,e.status,e.started_at,e.finished_at,e.summary,e.base_commit,e.changes_detected,e.session_id \
              FROM executions e JOIN tickets t ON t.id=e.ticket_id ORDER BY e.started_at DESC",
         )
         .map_err(|e| (500, e.to_string()))?;
@@ -747,6 +785,7 @@ fn list_sessions(state: &Arc<AppState>) -> HandlerResult {
                 summary: r.get(7)?,
                 base_commit: r.get(8)?,
                 changes_detected: r.get(9)?,
+                session_id: r.get(10)?,
             })
         })
         .map_err(|e| (500, e.to_string()))?
@@ -870,8 +909,8 @@ fn update_preferences(request: &mut Request, state: &Arc<AppState>) -> HandlerRe
     if input.max_concurrent_tasks == 0 {
         return Err((422, "El límite de concurrencia debe ser mayor que cero.".into()));
     }
-    if input.enabled_agents.iter().any(|agent| !matches!(agent.as_str(), "codex" | "claude")) {
-        return Err((422, "Los agentes disponibles son Codex y Claude.".into()));
+    if input.enabled_agents.iter().any(|agent| !matches!(agent.as_str(), "codex" | "claude" | "opencode")) {
+        return Err((422, "Los agentes disponibles son Codex, Claude y OpenCode.".into()));
     }
     let db = state.db.lock().map_err(|_| (500, "Base de datos no disponible".into()))?;
     db.execute(
@@ -1000,6 +1039,8 @@ mod tests {
         let log = "{\"item\":{\"type\":\"agent_message\",\"text\":\"listo\"}}\nnoise";
         assert_eq!(execution_summary(log), "listo");
         assert_eq!(execution_summary("plain text"), "plain text");
+        let opencode_log = "{\"type\":\"step_start\"}\n{\"type\":\"text\",\"part\":{\"text\":\"hecho\"}}\n{\"type\":\"step_finish\"}";
+        assert_eq!(execution_summary(opencode_log), "hecho");
     }
 
     #[test]

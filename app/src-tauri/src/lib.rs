@@ -14,6 +14,7 @@ struct AppState(Mutex<Connection>);
 
 const CODEX_MODELS: &[&str] = &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const CLAUDE_MODELS: &[&str] = &["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"];
+const OPENCODE_MODELS: &[&str] = &["openai/gpt-5.6-sol", "openai/gpt-5.6-terra", "openai/gpt-5.6-luna"];
 const DEFAULT_REASONING: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -27,6 +28,16 @@ struct Preferences {
     remote_endpoint: String,
     #[serde(default)]
     remote_token: String,
+    #[serde(default = "default_terminal")]
+    terminal: String,
+    #[serde(default)]
+    remote_ssh_target: String,
+}
+
+const TERMINALS: &[&str] = &["wezterm", "terminal", "kitty", "alacritty"];
+
+fn default_terminal() -> String {
+    "wezterm".into()
 }
 
 #[derive(Serialize)]
@@ -148,6 +159,8 @@ trait AgentAdapter {
     fn session_id_from_output(&self, _output: &str) -> Option<String> {
         None
     }
+    /// Arguments (after `cli_name`) that reopen a session in the agent's interactive UI.
+    fn interactive_resume_args(&self, session_id: &str) -> Vec<String>;
 }
 
 struct CodexAdapter;
@@ -180,6 +193,9 @@ impl AgentAdapter for CodexAdapter {
                 prompt.into(),
             ],
         })
+    }
+    fn interactive_resume_args(&self, session_id: &str) -> Vec<String> {
+        vec!["resume".into(), session_id.into()]
     }
     fn session_id_from_output(&self, output: &str) -> Option<String> {
         output.lines().find_map(|line| {
@@ -230,6 +246,9 @@ impl AgentAdapter for ClaudeAdapter {
             ],
         })
     }
+    fn interactive_resume_args(&self, session_id: &str) -> Vec<String> {
+        vec!["--resume".into(), session_id.into()]
+    }
     fn session_id_from_output(&self, output: &str) -> Option<String> {
         serde_json::from_str::<serde_json::Value>(output)
             .ok()?
@@ -239,10 +258,59 @@ impl AgentAdapter for ClaudeAdapter {
     }
 }
 
+struct OpenCodeAdapter;
+impl AgentAdapter for OpenCodeAdapter {
+    fn cli_name(&self) -> &'static str {
+        "opencode"
+    }
+    fn start(&self, ticket: &Ticket, prompt: &str) -> AgentInvocation {
+        AgentInvocation {
+            program: "opencode",
+            args: vec![
+                "run".into(),
+                "--model".into(),
+                ticket.model.clone(),
+                "--variant".into(),
+                ticket.reasoning.clone(),
+                "--auto".into(),
+                "--format".into(),
+                "json".into(),
+                prompt.into(),
+            ],
+        }
+    }
+    fn resume(&self, ticket: &Ticket, session_id: &str, prompt: &str) -> Option<AgentInvocation> {
+        Some(AgentInvocation {
+            program: "opencode",
+            args: vec![
+                "run".into(),
+                "--session".into(),
+                session_id.into(),
+                "--model".into(),
+                ticket.model.clone(),
+                "--variant".into(),
+                ticket.reasoning.clone(),
+                "--auto".into(),
+                prompt.into(),
+            ],
+        })
+    }
+    fn interactive_resume_args(&self, session_id: &str) -> Vec<String> {
+        vec!["--session".into(), session_id.into()]
+    }
+    fn session_id_from_output(&self, output: &str) -> Option<String> {
+        output.lines().find_map(|line| {
+            let event: serde_json::Value = serde_json::from_str(line).ok()?;
+            event.get("sessionID")?.as_str().map(str::to_owned)
+        })
+    }
+}
+
 fn adapter_for(agent: &str) -> Result<Box<dyn AgentAdapter>, String> {
     match agent {
         "codex" => Ok(Box::new(CodexAdapter)),
         "claude" => Ok(Box::new(ClaudeAdapter)),
+        "opencode" => Ok(Box::new(OpenCodeAdapter)),
         _ => Err("Agente no compatible.".into()),
     }
 }
@@ -250,10 +318,11 @@ fn adapter_for(agent: &str) -> Result<Box<dyn AgentAdapter>, String> {
 fn default_preferences() -> Preferences {
     Preferences {
         max_concurrent_tasks: 1,
-        enabled_agents: vec!["codex".into(), "claude".into()],
+        enabled_agents: vec!["codex".into(), "claude".into(), "opencode".into()],
         allowed_models: CODEX_MODELS
             .iter()
             .chain(CLAUDE_MODELS.iter())
+            .chain(OPENCODE_MODELS.iter())
             .map(|value| (*value).into())
             .collect(),
         allowed_reasoning: DEFAULT_REASONING
@@ -263,6 +332,8 @@ fn default_preferences() -> Preferences {
         execution_profile: "local".into(),
         remote_endpoint: String::new(),
         remote_token: String::new(),
+        terminal: default_terminal(),
+        remote_ssh_target: String::new(),
     }
 }
 
@@ -307,11 +378,29 @@ fn migrate(db: &Connection) -> rusqlite::Result<()> {
             params![ticket_id, repository_id],
         )?;
     }
-    let preferences = serde_json::to_string(&default_preferences()).unwrap();
+    let default_prefs = serde_json::to_string(&default_preferences()).unwrap();
     db.execute(
         "INSERT OR IGNORE INTO application_preferences (id,value) VALUES(1,?1)",
-        params![preferences],
+        params![default_prefs],
     )?;
+    // One-time: databases created before opencode existed only list codex/claude.
+    db.execute("CREATE TABLE IF NOT EXISTS applied_migrations (name TEXT PRIMARY KEY)", [])?;
+    if db.execute("INSERT OR IGNORE INTO applied_migrations (name) VALUES('enable_opencode')", [])? == 1 {
+        if let Ok(mut prefs) = preferences(db) {
+            if !prefs.enabled_agents.iter().any(|agent| agent == "opencode") {
+                prefs.enabled_agents.push("opencode".into());
+            }
+            for model in OPENCODE_MODELS {
+                if !prefs.allowed_models.iter().any(|allowed| allowed == model) {
+                    prefs.allowed_models.push((*model).into());
+                }
+            }
+            db.execute(
+                "UPDATE application_preferences SET value=?1 WHERE id=1",
+                params![serde_json::to_string(&prefs).unwrap()],
+            )?;
+        }
+    }
     db.execute("INSERT OR IGNORE INTO execution_queue (ticket_id,queued_at) SELECT id,updated_at FROM tickets WHERE status='todo'", [])?;
     Ok(())
 }
@@ -331,6 +420,12 @@ fn validate_preferences(value: &Preferences) -> Result<(), String> {
     if value.max_concurrent_tasks == 0 {
         return Err("El límite de concurrencia debe ser mayor que cero.".into());
     }
+    if !value.remote_ssh_target.is_empty() && !valid_ssh_target(&value.remote_ssh_target) {
+        return Err("El destino SSH no es válido. Usá usuario@host (o solo host).".into());
+    }
+    if !TERMINALS.contains(&value.terminal.as_str()) {
+        return Err("La terminal elegida no es compatible.".into());
+    }
     if value.execution_profile != "local" && value.execution_profile != "remote" {
         return Err("El perfil de ejecución es inválido.".into());
     }
@@ -345,9 +440,9 @@ fn validate_preferences(value: &Preferences) -> Result<(), String> {
     if value
         .enabled_agents
         .iter()
-        .any(|agent| !matches!(agent.as_str(), "codex" | "claude"))
+        .any(|agent| !matches!(agent.as_str(), "codex" | "claude" | "opencode"))
     {
-        return Err("Los agentes disponibles son Codex y Claude.".into());
+        return Err("Los agentes disponibles son Codex, Claude y OpenCode.".into());
     }
     Ok(())
 }
@@ -442,7 +537,7 @@ fn remote_request(request: RemoteRequest) -> Result<serde_json::Value, String> {
         other => return Err(format!("Método no soportado: {other}")),
     }
     .set("Authorization", &format!("Bearer {}", request.token))
-    .timeout(std::time::Duration::from_secs(20));
+    .timeout(std::time::Duration::from_secs(8));
     let result = match &request.body {
         Some(body) => call.send_json(body.clone()),
         None => call.call(),
@@ -510,7 +605,7 @@ fn valid(i: &CreateTicket) -> Result<(), String> {
     if !matches!(i.kind.as_str(), "task" | "planning") {
         return Err("Tipo de ticket inválido.".into());
     }
-    if !matches!(i.agent.as_str(), "codex" | "claude") {
+    if !matches!(i.agent.as_str(), "codex" | "claude" | "opencode") {
         return Err("Agente no compatible.".into());
     }
     Ok(())
@@ -1080,6 +1175,13 @@ fn execution_summary(log: &str) -> String {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
+        // opencode: `{"type":"text","part":{"text":"..."}}`.
+        if event.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+            if let Some(text) = event.pointer("/part/text").and_then(serde_json::Value::as_str) {
+                summary = Some(text.to_owned());
+            }
+            continue;
+        }
         let Some(item) = event.get("item") else {
             continue;
         };
@@ -1519,6 +1621,202 @@ fn retry_ticket(
     Ok(())
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Program and arguments that open `terminal` (in `dir`, if given), running `argv` if non-empty.
+fn terminal_command(terminal: &str, dir: Option<&str>, argv: &[String]) -> Result<(&'static str, Vec<String>), String> {
+    let mut args: Vec<String> = Vec::new();
+    match terminal {
+        "wezterm" => {
+            args.push("start".into());
+            if let Some(dir) = dir {
+                args.extend(["--cwd".into(), dir.into()]);
+            }
+            if !argv.is_empty() {
+                args.push("--".into());
+                args.extend(argv.iter().cloned());
+            }
+            Ok(("wezterm", args))
+        }
+        "kitty" => {
+            if let Some(dir) = dir {
+                args.extend(["--directory".into(), dir.into()]);
+            }
+            args.extend(argv.iter().cloned());
+            Ok(("kitty", args))
+        }
+        "alacritty" => {
+            if let Some(dir) = dir {
+                args.extend(["--working-directory".into(), dir.into()]);
+            }
+            if !argv.is_empty() {
+                args.push("-e".into());
+                args.extend(argv.iter().cloned());
+            }
+            Ok(("alacritty", args))
+        }
+        "terminal" => {
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(dir) = dir {
+                parts.push(format!("cd {}", shell_quote(dir)));
+            }
+            if !argv.is_empty() {
+                parts.push(argv.iter().map(|arg| shell_quote(arg)).collect::<Vec<_>>().join(" "));
+            }
+            let script = if parts.is_empty() { "clear".to_string() } else { parts.join(" && ") };
+            let script = script.replace('\\', "\\\\").replace('"', "\\\"");
+            Ok((
+                "osascript",
+                vec![
+                    "-e".into(),
+                    format!("tell application \"Terminal\" to do script \"{script}\""),
+                    "-e".into(),
+                    "tell application \"Terminal\" to activate".into(),
+                ],
+            ))
+        }
+        _ => Err("La terminal elegida no es compatible.".into()),
+    }
+}
+
+/// `[user@]host[:port]`, as ssh/wezterm accept it. Never starts with `-` (option injection).
+fn valid_ssh_target(target: &str) -> bool {
+    !target.is_empty()
+        && !target.starts_with('-')
+        && target.len() <= 255
+        && target.chars().all(|c| c.is_ascii_alphanumeric() || "._-@:[]".contains(c))
+}
+
+fn valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+/// Program and arguments that open `terminal` connected over SSH to `target`, `cd`-ing into
+/// `workspace` and running `argv` (or a login shell). Runs in a login shell so the agent CLIs
+/// are on PATH; every remote-controlled value is shell-quoted.
+fn remote_terminal_command(terminal: &str, target: &str, workspace: &str, argv: &[String]) -> Result<(&'static str, Vec<String>), String> {
+    if !valid_ssh_target(target) {
+        return Err("El destino SSH no es válido. Usá usuario@host (o solo host).".into());
+    }
+    let run = if argv.is_empty() {
+        "exec \"$SHELL\" -l".to_string()
+    } else {
+        format!("exec {}", argv.iter().map(|arg| shell_quote(arg)).collect::<Vec<_>>().join(" "))
+    };
+    let remote = format!("bash -lc {}", shell_quote(&format!("cd {} && {run}", shell_quote(workspace))));
+    if terminal == "wezterm" {
+        Ok(("wezterm", vec!["ssh".into(), target.into(), "--".into(), remote]))
+    } else {
+        terminal_command(terminal, None, &["ssh".into(), "-t".into(), target.into(), remote])
+    }
+}
+
+/// Opens the configured terminal in the ticket's folder; with `resume`, it reopens the
+/// agent's interactive UI on the session that resolved the ticket.
+#[tauri::command]
+fn open_in_terminal(ticket_id: String, resume: bool, execution_id: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let db = state.0.lock().map_err(|_| "Base de datos no disponible")?;
+    let (agent, workspace): (String, String) = db
+        .query_row("SELECT agent,workspace FROM tickets WHERE id=?1", params![ticket_id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|_| "Ticket no encontrado.".to_string())?;
+    let terminal = preferences(&db)?.terminal;
+    let mut argv: Vec<String> = Vec::new();
+    if resume {
+        // A specific execution (from the Sessions view) or, by default, the latest with a session.
+        let session: Option<String> = match &execution_id {
+            Some(execution) => db.query_row(
+                "SELECT session_id FROM executions WHERE id=?1 AND ticket_id=?2",
+                params![execution, ticket_id],
+                |row| row.get(0),
+            ),
+            None => db.query_row(
+                "SELECT session_id FROM executions WHERE ticket_id=?1 AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+                params![ticket_id],
+                |row| row.get(0),
+            ),
+        }
+        .optional()
+        .map_err(|error| error.to_string())?
+        .flatten();
+        let session = session.ok_or("Este ticket todavía no tiene una sesión del agente para retomar.")?;
+        let adapter = adapter_for(&agent)?;
+        argv.push(adapter.cli_name().into());
+        argv.extend(adapter.interactive_resume_args(&session));
+    }
+    drop(db);
+    launch_terminal(&terminal, &workspace, &argv)
+}
+
+/// Opens the configured terminal in a repository's folder.
+#[tauri::command]
+fn open_repository_in_terminal(repository_id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let db = state.0.lock().map_err(|_| "Base de datos no disponible")?;
+    let path = repository_path(&db, &Some(repository_id))?;
+    let terminal = preferences(&db)?.terminal;
+    drop(db);
+    launch_terminal(&terminal, &path, &[])
+}
+
+fn launch_terminal(terminal: &str, workspace: &str, argv: &[String]) -> Result<(), String> {
+    if !std::path::Path::new(workspace).is_dir() {
+        return Err(format!("La carpeta no existe: {workspace}"));
+    }
+    let (program, args) = terminal_command(terminal, Some(workspace), argv)?;
+    spawn_terminal(terminal, program, &args)
+}
+
+fn spawn_terminal(terminal: &str, program: &str, args: &[String]) -> Result<(), String> {
+    // GUI terminals are often missing from PATH when the app isn't launched from a shell.
+    let candidates: Vec<String> = match program {
+        "wezterm" => vec!["wezterm".into(), "/Applications/WezTerm.app/Contents/MacOS/wezterm".into(), "/opt/homebrew/bin/wezterm".into()],
+        other => vec![other.into()],
+    };
+    let mut last_error = String::new();
+    for candidate in candidates {
+        match Command::new(&candidate).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(mut child) => {
+                // Reap it in the background so it doesn't linger as a zombie.
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            Err(error) => last_error = error.to_string(),
+        }
+    }
+    Err(format!("No se pudo abrir la terminal «{terminal}»: {last_error}"))
+}
+
+/// Remote profile: opens the configured terminal over SSH on the machine running
+/// `palantir-server`, in `workspace` (a path on that machine). With `agent` it reopens
+/// `session_id` in that agent's UI; otherwise just a login shell.
+#[tauri::command]
+fn open_remote_terminal(
+    ssh_target: String,
+    workspace: String,
+    agent: Option<String>,
+    session_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let terminal = {
+        let db = state.0.lock().map_err(|_| "Base de datos no disponible")?;
+        preferences(&db)?.terminal
+    };
+    let mut argv: Vec<String> = Vec::new();
+    if let Some(agent) = agent {
+        let session = session_id
+            .filter(|id| valid_session_id(id))
+            .ok_or("Esta sesión no tiene un id válido para retomar.")?;
+        let adapter = adapter_for(&agent)?;
+        argv.push(adapter.cli_name().into());
+        argv.extend(adapter.interactive_resume_args(&session));
+    }
+    let (program, args) = remote_terminal_command(&terminal, &ssh_target, &workspace, &argv)?;
+    spawn_terminal(&terminal, program, &args)
+}
+
 #[tauri::command]
 fn stop_execution(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let db = state.0.lock().map_err(|_| "Base de datos no disponible")?;
@@ -1646,6 +1944,9 @@ pub fn run() {
             start_agent,
             retry_ticket,
             stop_execution,
+            open_in_terminal,
+            open_repository_in_terminal,
+            open_remote_terminal,
             list_sessions,
             send_follow_up,
             get_plan,
@@ -1841,6 +2142,50 @@ mod tests {
     }
 
     #[test]
+    fn builds_terminal_commands_per_terminal() {
+        let argv = vec!["claude".to_string(), "--resume".to_string(), "abc".to_string()];
+        let (program, args) = terminal_command("wezterm", Some("/tmp/my repo"), &argv).unwrap();
+        assert_eq!(program, "wezterm");
+        assert_eq!(args, ["start", "--cwd", "/tmp/my repo", "--", "claude", "--resume", "abc"]);
+        let (_, plain) = terminal_command("wezterm", Some("/tmp"), &[]).unwrap();
+        assert_eq!(plain, ["start", "--cwd", "/tmp"]);
+        let (program, args) = terminal_command("terminal", Some("/tmp/it's"), &argv).unwrap();
+        assert_eq!(program, "osascript");
+        assert!(args[1].contains("cd '/tmp/it'\\\\''s' && 'claude' '--resume' 'abc'"));
+        assert!(terminal_command("xterm", Some("/tmp"), &[]).is_err());
+    }
+
+    #[test]
+    fn builds_remote_terminal_commands_over_ssh() {
+        let argv = vec!["claude".to_string(), "--resume".to_string(), "abc".to_string()];
+        let (program, args) = remote_terminal_command("wezterm", "me@100.1.2.3", "/srv/my repo", &argv).unwrap();
+        assert_eq!(program, "wezterm");
+        assert_eq!(&args[..3], ["ssh", "me@100.1.2.3", "--"]);
+        assert!(args[3].starts_with("bash -lc "));
+        assert!(args[3].contains("/srv/my repo") && args[3].contains("--resume") && args[3].contains("abc"));
+        let (program, args) = remote_terminal_command("kitty", "host", "/srv", &[]).unwrap();
+        assert_eq!(program, "kitty");
+        assert_eq!(&args[..3], ["ssh", "-t", "host"]);
+        assert!(args[3].contains("$SHELL"));
+        assert!(remote_terminal_command("wezterm", "-oProxyCommand=evil", "/srv", &[]).is_err());
+        assert!(remote_terminal_command("wezterm", "a b", "/srv", &[]).is_err());
+        assert!(valid_session_id("ses_f2e6-1.x") && !valid_session_id("x; rm -rf /") && !valid_session_id(""));
+    }
+
+    #[test]
+    fn interactive_resume_uses_each_agents_own_flag() {
+        assert_eq!(CodexAdapter.interactive_resume_args("s"), ["resume", "s"]);
+        assert_eq!(ClaudeAdapter.interactive_resume_args("s"), ["--resume", "s"]);
+        assert_eq!(OpenCodeAdapter.interactive_resume_args("s"), ["--session", "s"]);
+    }
+
+    #[test]
+    fn execution_summary_reads_opencode_text_events() {
+        let log = "{\"type\":\"step_start\"}\n{\"type\":\"text\",\"part\":{\"text\":\"hecho\"}}\n{\"type\":\"step_finish\"}";
+        assert_eq!(execution_summary(log), "hecho");
+    }
+
+    #[test]
     fn adapters_capture_sessions_and_build_resume_commands() {
         let codex = CodexAdapter;
         assert_eq!(
@@ -1864,6 +2209,17 @@ mod tests {
             .unwrap()
             .args
             .contains(&"session-1".into()));
+
+        let opencode = OpenCodeAdapter;
+        assert_eq!(
+            opencode.session_id_from_output("{\"type\":\"step_start\",\"sessionID\":\"ses_1\"}"),
+            Some("ses_1".into())
+        );
+        assert!(opencode
+            .resume(&test_ticket("opencode"), "ses_1", "seguí")
+            .unwrap()
+            .args
+            .contains(&"ses_1".into()));
     }
 
     #[test]

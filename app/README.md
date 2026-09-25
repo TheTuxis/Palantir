@@ -7,7 +7,7 @@ Aplicación de escritorio local para administrar tickets Kanban ejecutados por a
 - Node.js 22+ y npm.
 - Rust estable y Cargo (para Tauri).
 - Git disponible en `PATH`.
-- La CLI `codex` y/o `claude` instalada y autenticada localmente, según el/los agente(s) habilitado(s). Palantir usa `codex exec` y `claude --print`; no recibe, almacena ni transmite claves, sesiones de cuenta o credenciales.
+- La CLI `codex`, `claude` y/o `opencode` instalada y autenticada localmente, según el/los agente(s) habilitado(s). Palantir usa `codex exec`, `claude --print` y `opencode run`; no recibe, almacena ni transmite claves, sesiones de cuenta o credenciales.
 
 ## Desarrollo y comprobación
 
@@ -23,7 +23,7 @@ cd src-tauri && cargo test
 
 ## Flujo y permisos
 
-Un ticket comienza en Backlog. Al moverlo a To do, Palantir verifica que la carpeta sea un repositorio Git, registra el commit base, crea o reutiliza una rama `palantir/...` y ejecuta el agente configurado (Codex o Claude) dentro de esa carpeta. La aplicación muestra una advertencia si el árbol de trabajo ya tenía cambios y bloquea ejecuciones simultáneas sobre la misma carpeta.
+Un ticket comienza en Backlog. Al moverlo a To do, Palantir verifica que la carpeta sea un repositorio Git, registra el commit base, crea o reutiliza una rama `palantir/...` y ejecuta el agente configurado (Codex, Claude u OpenCode) dentro de esa carpeta. La aplicación muestra una advertencia si el árbol de trabajo ya tenía cambios y bloquea ejecuciones simultáneas sobre la misma carpeta.
 
 Palantir no hace `merge`, `push`, borrado de ramas ni configuración de credenciales. El agente recibe los permisos que determine su CLI local; revisá sus argumentos y autenticación antes de iniciar trabajo sobre un repositorio sensible.
 

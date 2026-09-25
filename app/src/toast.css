@@ -1,0 +1,6 @@
+.toast{position:fixed;right:20px;bottom:44px;z-index:40;display:flex;align-items:flex-start;gap:12px;max-width:min(420px,calc(100vw - 40px));padding:10px 12px 10px 14px;border:1px solid #76683c;border-radius:9px;background:#2b2818;color:#f0e4a0;font-size:12px;line-height:1.45;box-shadow:0 10px 30px #000a;animation:toast-in .18s ease-out}
+.toast span{min-width:0;overflow-wrap:anywhere}
+.toast button{flex:none;margin:-2px 0 0;padding:0 4px;border:0;background:transparent;color:inherit;font-size:16px;line-height:1;cursor:pointer;opacity:.7}
+.toast button:hover{opacity:1}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px)}}
+@media(prefers-reduced-motion:reduce){.toast{animation:none}}

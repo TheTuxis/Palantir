@@ -1,13 +1,13 @@
 # Palantir
 
-Palantir es una aplicación de escritorio local para gestionar tickets Kanban con agentes de código, como Codex y Claude. Cada ticket conserva su configuración, trabaja sobre una rama Git dedicada y finaliza en Review, sin hacer merges automáticos.
+Palantir es una aplicación de escritorio local para gestionar tickets Kanban con agentes de código, como Codex, Claude y OpenCode. Cada ticket conserva su configuración, trabaja sobre una rama Git dedicada y finaliza en Review, sin hacer merges automáticos.
 
 ## Requisitos
 
 - Node.js 22 o superior
 - Rust estable y Cargo
 - Git
-- Codex y/o Claude instalados y autenticados localmente
+- Codex, Claude y/o OpenCode instalados y autenticados localmente
 
 ## Ejecutar en desarrollo
 
